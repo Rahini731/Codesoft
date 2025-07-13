@@ -1,0 +1,90 @@
+import pandas as pd
+import numpy as np
+import ast
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import mean_squared_error
+from sklearn.preprocessing import MultiLabelBinarizer
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+# 1. Load dataset
+movies = pd.read_csv("tmdb_5000_movies.csv")
+credits = pd.read_csv("tmdb_5000_credits.csv")
+
+# Merge on 'title'
+movies = movies.merge(credits, left_on='title', right_on='title')
+
+# 2. Feature Engineering
+def convert(obj):
+    try:
+        return [i['name'] for i in ast.literal_eval(obj)]
+    except:
+        return []
+
+# Genres
+movies['genres'] = movies['genres'].apply(convert)
+
+# Director
+def get_director(crew_str):
+    try:
+        crew = ast.literal_eval(crew_str)
+        for member in crew:
+            if member['job'] == 'Director':
+                return member['name']
+        return np.nan
+    except:
+        return np.nan
+
+movies['director'] = movies['crew'].apply(get_director)
+
+# Top 3 Cast
+def get_top_cast(cast_str):
+    try:
+        cast = ast.literal_eval(cast_str)
+        return [member['name'] for member in cast[:3]]
+    except:
+        return []
+
+movies['top_cast'] = movies['cast'].apply(get_top_cast)
+
+# Drop rows with missing rating
+movies = movies.dropna(subset=['vote_average'])
+
+# 3. Prepare data for model
+df = movies[['vote_average', 'genres', 'top_cast', 'director', 'runtime', 'popularity']].dropna()
+
+# One-hot encode genres
+mlb = MultiLabelBinarizer()
+genres_encoded = pd.DataFrame(mlb.fit_transform(df['genres']), columns=mlb.classes_)
+cast_encoded = pd.DataFrame(mlb.fit_transform(df['top_cast']), columns=mlb.classes_)
+
+# Encode director
+df['director'] = df['director'].astype(str)
+top_directors = df['director'].value_counts().head(20).index
+df['director'] = df['director'].apply(lambda x: x if x in top_directors else 'Other')
+director_encoded = pd.get_dummies(df['director'], prefix='director')
+
+# Final feature set
+X = pd.concat([genres_encoded, cast_encoded, director_encoded, df[['runtime', 'popularity']]], axis=1)
+y = df['vote_average']
+
+# 4. Train-Test Split
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
+# 5. Train Model
+model = RandomForestRegressor(n_estimators=100, random_state=42)
+model.fit(X_train, y_train)
+
+# 6. Evaluate
+y_pred = model.predict(X_test)
+rmse = np.sqrt(mean_squared_error(y_test, y_pred))
+print(f"Root Mean Squared Error (RMSE): {rmse:.2f}")
+
+# 7. Plot Prediction vs Actual
+plt.figure(figsize=(8,6))
+sns.scatterplot(x=y_test, y=y_pred)
+plt.xlabel("Actual Ratings")
+plt.ylabel("Predicted Ratings")
+plt.title("Actual vs Predicted Movie Ratings")
+plt.show()
